@@ -1,5 +1,6 @@
 import ffmpeg
 import os
+import subprocess
 
 # Codec maps for video formats, audio formats, and image formats.
 VIDEO_CODEC_MAP = {
@@ -25,18 +26,45 @@ IMAGE_CODEC_MAP = {
     ".tiff": "tiff"
 }
 
+def detect_hw_accelerator():
+    """Detect available hardware encoder."""
+    try:
+        output = subprocess.check_output(['ffmpeg', '-encoders'], stderr=subprocess.DEVNULL).decode()
+        if 'h264_nvenc' in output:
+            return 'nvenc'
+        elif 'h264_qsv' in output:
+            return 'qsv'
+        elif 'h264_vaapi' in output:
+            return 'vaapi'
+    except Exception:
+        pass
+    return None
+
 
 def convert_video(input_file: str, output_file: str, video_codec: str = "", audio_codec: str = ""):
-    if video_codec == "" or audio_codec == "": # If either codec is not specified, determine them based on the output file extension.
-            ext = os.path.splitext(output_file)[1].lower()
+    if not video_codec or not audio_codec:
+        ext = os.path.splitext(output_file)[1].lower()
+
+        hw = detect_hw_accelerator()
+        if hw:
+            # try hardware codec first
+            hw_ext_map = {
+                "nvenc": f"{ext}_hw",
+                "qsv": f"{ext}_qsv",
+                "vaapi": f"{ext}_vaapi"
+            }
+            hw_ext = hw_ext_map.get(hw, "")
+            video_codec, audio_codec = VIDEO_CODEC_MAP.get(hw_ext, VIDEO_CODEC_MAP.get(ext))
+        else:
+            # fallback to software codec
             video_codec, audio_codec = VIDEO_CODEC_MAP.get(ext, ("libx264", "aac"))
+
     try:
-        (
-            ffmpeg
-            .input(input_file)
-            .output(output_file, vcodec=video_codec, acodec=audio_codec) 
-            .run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
-        )
+        ffmpeg.input(input_file).output(
+            output_file,
+            vcodec=video_codec,
+            acodec=audio_codec
+        ).run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
         print('Video conversion successful!')
     except ffmpeg.Error as e:
         print('Error converting video:', e.stderr.decode())
